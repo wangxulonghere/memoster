@@ -20,5 +20,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "leo2025 Application"
-include(":app")
+include(":memeoster")
  
