@@ -61,12 +61,14 @@ class StudyViewModel(private val repository: InMemoryRepository) : ViewModel() {
         advance(-1)
     }
 
-    fun addNewItem(text: String) {
+    fun addNewItem(text: String, chineseTranslation: String? = null, notes: String? = null) {
         log("=== SYSTEM: addNewItem() called ===")
         log("Input text: '$text'")
+        log("Chinese: '$chineseTranslation'")
+        log("Notes: '$notes'")
         log("Before add - items count: ${_items.size}")
         
-        val new = repository.add(text)
+        val new = repository.add(text, chineseTranslation, notes)
         log("Repository.add() returned: ${new.text}")
         
         _items.add(new)

@@ -1,10 +1,13 @@
 package com.example.leo2025application
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
+// import androidx.activity.enableEdgeToEdge // 降级版本中不可用
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -27,7 +30,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // enableEdgeToEdge() // 降级版本中不可用
         
         repository = InMemoryRepository(this)
         setContent {
@@ -63,6 +66,14 @@ fun StudyScreen(speak: (String) -> Unit) {
     val repository = InMemoryRepository(LocalContext.current)
     val viewModel: StudyViewModel = viewModel { StudyViewModel(repository) }
     
+    // 状态管理
+    var showSystemLogs by remember { mutableStateOf(true) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
+    var newItemText by remember { mutableStateOf("") }
+    var newItemChinese by remember { mutableStateOf("") }
+    var newItemNotes by remember { mutableStateOf("") }
+    
     LaunchedEffect(Unit) {
         viewModel.onAppear()
     }
@@ -81,9 +92,9 @@ fun StudyScreen(speak: (String) -> Unit) {
             modifier = Modifier.fillMaxHeight(0.4f),
             systemLogs = systemLogs,
             learningLogs = learningLogs,
-            showSystemLogs = true,
+            showSystemLogs = showSystemLogs,
             onLogCopied = { viewModel.addNewItem("日志已复制") },
-            onToggleLogType = { /* 暂时不实现 */ }
+            onToggleLogType = { showSystemLogs = !showSystemLogs }
         )
         
         // 学习内容
@@ -102,12 +113,89 @@ fun StudyScreen(speak: (String) -> Unit) {
         
         // 底部导航
         BottomNavigationBar(
-            onAdd = { viewModel.addNewItem("新内容") },
+            onAdd = { showAddDialog = true },
             onLeft1 = { viewModel.addNewItem("设置功能") },
-            onLeft2 = { viewModel.addNewItem("复习队列") },
+            onLeft2 = { showImportDialog = true },
             onRight1 = { viewModel.addNewItem("统计功能") },
             onRight2 = { viewModel.addNewItem("更多功能") }
         )
+        
+        // 添加项目对话框
+        if (showAddDialog) {
+            AlertDialog(
+                onDismissRequest = { showAddDialog = false },
+                title = { Text("添加新内容") },
+                text = {
+                    Column {
+                        TextField(
+                            value = newItemText,
+                            onValueChange = { newItemText = it },
+                            label = { Text("英文内容") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextField(
+                            value = newItemChinese,
+                            onValueChange = { newItemChinese = it },
+                            label = { Text("中文译文（可选）") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextField(
+                            value = newItemNotes,
+                            onValueChange = { newItemNotes = it },
+                            label = { Text("注释（可选）") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (newItemText.isNotBlank()) {
+                                viewModel.addNewItem(newItemText, newItemChinese.ifBlank { null }, newItemNotes.ifBlank { null })
+                                newItemText = ""
+                                newItemChinese = ""
+                                newItemNotes = ""
+                                showAddDialog = false
+                            }
+                        }
+                    ) {
+                        Text("添加")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAddDialog = false }) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
+        
+        // 导入文件对话框
+        if (showImportDialog) {
+            AlertDialog(
+                onDismissRequest = { showImportDialog = false },
+                title = { Text("批量导入") },
+                text = { Text("请选择Excel文件进行批量导入") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            // TODO: 实现文件选择
+                            viewModel.addNewItem("批量导入功能待实现")
+                            showImportDialog = false
+                        }
+                    ) {
+                        Text("选择文件")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showImportDialog = false }) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -120,6 +208,8 @@ fun LogPanel(
     onLogCopied: () -> Unit,
     onToggleLogType: () -> Unit
 ) {
+    val context = LocalContext.current
+    
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -127,14 +217,45 @@ fun LogPanel(
             .verticalScroll(rememberScrollState())
             .padding(8.dp)
     ) {
-        Text(
-            text = "系统日志",
-            style = MaterialTheme.typography.titleMedium
-        )
+        // 日志标题和按钮行
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (showSystemLogs) "系统日志" else "学习日志",
+                style = MaterialTheme.typography.titleMedium
+            )
+            
+            Row {
+                Button(
+                    onClick = onToggleLogType,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                ) {
+                    Text(if (showSystemLogs) "切换学习" else "切换系统", style = MaterialTheme.typography.bodySmall)
+                }
+                
+                Button(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val currentLogs = if (showSystemLogs) systemLogs else learningLogs
+                        val logText = currentLogs.joinToString("\n")
+                        clipboard.setPrimaryClip(ClipData.newPlainText("日志", logText))
+                        onLogCopied()
+                    },
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                ) {
+                    Text("复制当前", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
         
         Spacer(modifier = Modifier.height(8.dp))
         
-        systemLogs.forEach { line ->
+        // 显示当前选中的日志
+        val currentLogs = if (showSystemLogs) systemLogs else learningLogs
+        currentLogs.forEach { line ->
             Text(
                 text = line,
                 style = MaterialTheme.typography.bodySmall,
