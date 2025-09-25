@@ -3,10 +3,13 @@ package com.example.leo2025application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 // import androidx.activity.enableEdgeToEdge // 降级版本中不可用
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -19,20 +22,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.leo2025application.ui.StudyViewModel
+import com.example.leo2025application.ui.SimpleViewModel
 import com.example.leo2025application.ui.theme.Leo2025ApplicationTheme
-import com.example.leo2025application.data.InMemoryRepository
+import com.example.leo2025application.data.SimpleRepository
+import com.example.leo2025application.data.ExcelImporter
+import com.example.leo2025application.data.StudyItem
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
-    private lateinit var repository: InMemoryRepository
+    private lateinit var repository: SimpleRepository
     private var tts: TextToSpeech? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // enableEdgeToEdge() // 降级版本中不可用
         
-        repository = InMemoryRepository(this)
+        repository = SimpleRepository(this)
         setContent {
             Leo2025ApplicationTheme {
                 var ttsReady by remember { mutableStateOf(false) }
@@ -50,6 +57,7 @@ class MainActivity : ComponentActivity() {
                 }
                 
                 StudyScreen(
+                    repository = repository,
                     speak = { text ->
                         if (ttsReady) {
                             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance")
@@ -62,14 +70,16 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun StudyScreen(speak: (String) -> Unit) {
-    val repository = InMemoryRepository(LocalContext.current)
-    val viewModel: StudyViewModel = viewModel { StudyViewModel(repository) }
+fun StudyScreen(repository: SimpleRepository, speak: (String) -> Unit) {
+    val context = LocalContext.current
+    val viewModel: SimpleViewModel = viewModel { SimpleViewModel(repository) }
     
     // 状态管理
     var showSystemLogs by remember { mutableStateOf(true) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showTranslation by remember { mutableStateOf(false) }
     var newItemText by remember { mutableStateOf("") }
     var newItemChinese by remember { mutableStateOf("") }
     var newItemNotes by remember { mutableStateOf("") }
@@ -93,7 +103,7 @@ fun StudyScreen(speak: (String) -> Unit) {
             systemLogs = systemLogs,
             learningLogs = learningLogs,
             showSystemLogs = showSystemLogs,
-            onLogCopied = { viewModel.addNewItem("日志已复制") },
+            onLogCopied = { /* 复制完成，不需要添加内容 */ },
             onToggleLogType = { showSystemLogs = !showSystemLogs }
         )
         
@@ -103,21 +113,90 @@ fun StudyScreen(speak: (String) -> Unit) {
             currentItem = currentItem,
             onSpeak = { text ->
                 speak(text)
+                showTranslation = true
                 viewModel.onTapSpeakRequested()
             },
-            onSwipeNext = viewModel::onSwipeNext,
-            onSwipePrev = viewModel::onSwipePrev,
-            showTranslation = false,
-            onToggleTranslation = { /* 暂时不实现 */ }
+            onSwipeNext = { 
+                showTranslation = false
+                viewModel.onSwipeNext()
+            },
+            onSwipePrev = { 
+                showTranslation = false
+                viewModel.onSwipePrev()
+            },
+            showTranslation = showTranslation,
+            onToggleTranslation = { showTranslation = !showTranslation }
         )
+        
+        // 导航按钮（上一个/播放/下一个）
+        Row(
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Button(
+                onClick = { 
+                    showTranslation = false
+                    viewModel.onSwipePrev()
+                },
+                modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+            ) {
+                Text("上一个")
+            }
+            
+            Button(
+                onClick = { 
+                    currentItem?.text?.let { text -> 
+                        speak(text)
+                        showTranslation = true
+                        viewModel.onTapSpeakRequested()
+                    }
+                },
+                modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+            ) {
+                Text("播放")
+            }
+            
+            Button(
+                onClick = { 
+                    showTranslation = false
+                    viewModel.onSwipeNext()
+                },
+                modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+            ) {
+                Text("下一个")
+            }
+        }
         
         // 底部导航
         BottomNavigationBar(
             onAdd = { showAddDialog = true },
-            onLeft1 = { viewModel.addNewItem("设置功能") },
+            onLeft1 = { 
+                // 清理测试数据功能
+                GlobalScope.launch {
+                    try {
+                        android.util.Log.d("MainActivity", "=== 开始清理测试数据 ===")
+                        repository.clearAllItems()
+                        viewModel.refreshItems()
+                        viewModel.logSystemMessage("已清理所有测试数据")
+                        android.util.Log.d("MainActivity", "=== 清理测试数据完成 ===")
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "清理数据失败", e)
+                    }
+                }
+            },
             onLeft2 = { showImportDialog = true },
-            onRight1 = { viewModel.addNewItem("统计功能") },
-            onRight2 = { viewModel.addNewItem("更多功能") }
+            onRight1 = { 
+                // 显示删除确认对话框
+                currentItem?.let { currentItem ->
+                    showDeleteDialog = true
+                }
+            },
+            onRight2 = { 
+                viewModel.logSystemMessage("更多功能按钮被点击")
+                // TODO: 实现更多功能
+            }
         )
         
         // 添加项目对话框
@@ -172,18 +251,60 @@ fun StudyScreen(speak: (String) -> Unit) {
             )
         }
         
+        // 文件选择器
+        val filePickerLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri: Uri? ->
+            android.util.Log.d("MainActivity", "文件选择器回调，URI: $uri")
+            uri?.let {
+                // 使用协程处理文件导入
+                GlobalScope.launch {
+                    try {
+                        android.util.Log.d("MainActivity", "开始导入文件: $it")
+                        val importer = ExcelImporter(context)
+                        val items = importer.importFromExcel(it)
+                        
+                        android.util.Log.d("MainActivity", "导入解析完成，获得 ${items.size} 条内容")
+                        
+                        if (items.isNotEmpty()) {
+                            android.util.Log.d("MainActivity", "开始批量添加到Repository")
+                            importer.importBatch(items, repository)
+                            
+                            android.util.Log.d("MainActivity", "开始刷新ViewModel")
+                            // 通知ViewModel更新items列表
+                            viewModel.refreshItems()
+                            
+                            // 只记录到系统日志，不添加到学习内容
+                            viewModel.logSystemMessage("成功导入 ${items.size} 条内容")
+                        } else {
+                            android.util.Log.d("MainActivity", "导入结果为空")
+                            viewModel.logSystemMessage("导入失败：文件格式错误或为空")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "导入过程异常", e)
+                        android.util.Log.e("MainActivity", "异常堆栈: ${e.stackTrace.joinToString("\n")}")
+                        viewModel.addNewItem("导入失败：${e.message}")
+                    }
+                }
+            } ?: run {
+                android.util.Log.d("MainActivity", "文件选择被取消或URI为null")
+            }
+            showImportDialog = false
+        }
+        
         // 导入文件对话框
         if (showImportDialog) {
             AlertDialog(
                 onDismissRequest = { showImportDialog = false },
                 title = { Text("批量导入") },
-                text = { Text("请选择Excel文件进行批量导入") },
+                text = { Text("请选择CSV或TXT文件进行批量导入\n格式：英文,中文,注释") },
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            // TODO: 实现文件选择
-                            viewModel.addNewItem("批量导入功能待实现")
-                            showImportDialog = false
+                            android.util.Log.d("MainActivity", "用户点击了选择文件按钮")
+                            android.util.Log.d("MainActivity", "准备启动文件选择器")
+                            filePickerLauncher.launch(arrayOf("*/*"))
+                            android.util.Log.d("MainActivity", "文件选择器已启动")
                         }
                     ) {
                         Text("选择文件")
@@ -195,6 +316,33 @@ fun StudyScreen(speak: (String) -> Unit) {
                     }
                 }
             )
+        }
+        
+        // 删除确认对话框
+        if (showDeleteDialog) {
+            currentItem?.let { currentItem ->
+                AlertDialog(
+                    onDismissRequest = { showDeleteDialog = false },
+                    title = { Text("确认删除") },
+                    text = { Text("确定要删除当前学习内容吗？\n\n\"${currentItem.text}\"") },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                viewModel.deleteCurrentItem(currentItem.id)
+                                viewModel.logSystemMessage("已删除当前内容: ${currentItem.text}")
+                                showDeleteDialog = false
+                            }
+                        ) {
+                            Text("删除", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDeleteDialog = false }) {
+                            Text("取消")
+                        }
+                    }
+                )
+            }
         }
     }
 }
@@ -256,7 +404,7 @@ fun LogPanel(
         // 显示当前选中的日志
         val currentLogs = if (showSystemLogs) systemLogs else learningLogs
         currentLogs.forEach { line ->
-            Text(
+    Text(
                 text = line,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 2.dp)
@@ -289,45 +437,44 @@ fun StudyContent(
             modifier = Modifier.padding(16.dp)
         )
         
-        // 中文译文（如果显示）
-        if (showTranslation) {
-            Text(
-                text = currentItem?.chineseTranslation ?: "",
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(8.dp)
-            )
-        }
+        // 预留中文译文显示空间
+        Spacer(modifier = Modifier.height(8.dp))
         
-        // 注释（如果显示）
-        if (showTranslation && !currentItem?.notes.isNullOrBlank()) {
-            Text(
-                text = currentItem?.notes ?: "",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(8.dp)
-            )
-        }
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        // 导航按钮
-        Row(
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            modifier = Modifier.fillMaxWidth()
+        // 中文译文区域（固定高度，无论是否显示）
+        Box(
+            modifier = Modifier
+                .height(80.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Button(onClick = onSwipePrev) {
-                Text("上一个")
-            }
-            
-            Button(
-                onClick = { currentItem?.text?.let { text -> onSpeak(text) } }
-            ) {
-                Text("播放")
-            }
-            
-            Button(onClick = onSwipeNext) {
-                Text("下一个")
+            if (showTranslation && !currentItem?.chineseTranslation.isNullOrBlank()) {
+                Text(
+                    text = currentItem?.chineseTranslation ?: "",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.secondary
+                )
             }
         }
+        
+        // 注释区域（固定高度，无论是否显示）
+        Box(
+            modifier = Modifier
+                .height(60.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (showTranslation && !currentItem?.notes.isNullOrBlank()) {
+                Text(
+                    text = currentItem?.notes ?: "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+        }
+        
+        Spacer(modifier = Modifier.weight(1f))
     }
 }
 
@@ -360,7 +507,7 @@ fun BottomNavigationBar(
             onClick = onLeft2,
             modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
         ) {
-            Text("复习", style = MaterialTheme.typography.bodySmall)
+            Text("导入", style = MaterialTheme.typography.bodySmall)
         }
         
         Button(
@@ -374,7 +521,7 @@ fun BottomNavigationBar(
             onClick = onRight1,
             modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
         ) {
-            Text("统计", style = MaterialTheme.typography.bodySmall)
+            Text("删除", style = MaterialTheme.typography.bodySmall)
         }
         
         Button(

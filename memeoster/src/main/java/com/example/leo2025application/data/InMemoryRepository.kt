@@ -1,6 +1,7 @@
 package com.example.leo2025application.data
 
 import android.content.Context
+import android.util.Log
 
 class InMemoryRepository(private val context: Context) {
     private val items: MutableList<StudyItem> = mutableListOf(
@@ -21,7 +22,11 @@ class InMemoryRepository(private val context: Context) {
     }
     
     fun addBatch(itemsToAdd: List<StudyItem>) {
+        Log.d("InMemoryRepository", "addBatch: 准备添加 ${itemsToAdd.size} 条")
+        Log.d("InMemoryRepository", "addBatch: 添加前items.size = ${items.size}")
         items.addAll(itemsToAdd)
+        Log.d("InMemoryRepository", "addBatch: 添加后items.size = ${items.size}")
+        Log.d("InMemoryRepository", "addBatch: 新添加的内容: ${itemsToAdd.map { it.text }}")
     }
     
     fun recordReview(record: ReviewRecord, schedule: ReviewSchedule) {
@@ -30,4 +35,12 @@ class InMemoryRepository(private val context: Context) {
     }
     
     fun getSchedule(itemId: String): ReviewSchedule? = reviewSchedules[itemId]
+    
+    fun getAllItems(): List<StudyItem> = items.toList()
+    
+    fun clearAllItems() {
+        Log.d("InMemoryRepository", "清空所有项目，当前数量: ${items.size}")
+        items.clear()
+        Log.d("InMemoryRepository", "清空完成，当前数量: ${items.size}")
+    }
 }

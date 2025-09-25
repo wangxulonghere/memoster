@@ -52,6 +52,11 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     
+    // Room数据库依赖
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    implementation("androidx.room:room-paging:2.6.1")
+    
     // 暂时移除POI依赖，使用CSV导入
     // implementation("org.apache.poi:poi:5.2.3")
     // implementation("org.apache.poi:poi-ooxml:5.2.3")
