@@ -193,10 +193,9 @@ fun StudyScreen(repository: SimpleRepository, speak: (String) -> Unit) {
                     showDeleteDialog = true
                 }
             },
-            onRight2 = { 
-                viewModel.logSystemMessage("更多功能按钮被点击")
-                // TODO: 实现更多功能
-            }
+                   onRight2 = {
+                       viewModel.logReviewStatus()
+                   }
         )
         
         // 添加项目对话框

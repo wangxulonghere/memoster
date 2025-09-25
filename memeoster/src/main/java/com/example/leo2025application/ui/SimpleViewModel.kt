@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.TimeZone
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class SimpleViewModel(private val repository: SimpleRepository) : ViewModel() {
     
@@ -57,16 +60,16 @@ class SimpleViewModel(private val repository: SimpleRepository) : ViewModel() {
     }
     
     fun onTapSpeakRequested() {
-        logLearning("Tap to speak: ${_currentItem.value?.text}")
+        log("Tap to speak: ${_currentItem.value?.text}")
     }
     
     fun onSwipeNext() {
-        logLearning("Swipe Next detected!")
+        log("Swipe Next detected!")
         advance(1)
     }
     
     fun onSwipePrev() {
-        logLearning("Swipe Prev detected!")
+        log("Swipe Prev detected!")
         advance(-1)
     }
     
@@ -115,6 +118,39 @@ class SimpleViewModel(private val repository: SimpleRepository) : ViewModel() {
         }
     }
     
+    fun logReviewStatus() {
+        logLearning("=== 复习状态报告 ===")
+        
+        val allItems = repository.getAllItems()
+        logLearning("数据库总内容数: ${allItems.size}")
+        
+        val currentTime = nowUtc()
+        val overdueItems = mutableListOf<Pair<StudyItem, Long>>()
+        
+        // 检查所有项目的复习状态
+        allItems.forEach { item ->
+            val schedule = repository.getSchedule(item.id)
+            if (schedule != null) {
+                if (schedule.nextReviewUtcMillis < currentTime) {
+                    overdueItems.add(Pair(item, schedule.nextReviewUtcMillis))
+                }
+            }
+        }
+        
+        if (overdueItems.isEmpty()) {
+            logLearning("复习任务完成！")
+        } else {
+            // 按下次复习时间从大到小排序（最紧急的在前）
+            overdueItems.sortBy { it.second }
+            
+            logLearning("已超时的内容 (共${overdueItems.size}条):")
+            overdueItems.forEach { (item, nextTime) ->
+                val beijingTime = getBeijingTimeString(nextTime)
+                logLearning("• ${item.text} - 应复习时间: $beijingTime")
+            }
+        }
+    }
+    
     private fun advance(delta: Int) {
         log("=== SYSTEM: advance() called ===")
         log("Delta: $delta")
@@ -146,7 +182,17 @@ class SimpleViewModel(private val repository: SimpleRepository) : ViewModel() {
         val dwellTime = nowUtc() - lastEnterUtcMillis
         val strength = calculateMemoryStrength(dwellTime)
         
-        logLearning("Dwell=${dwellTime}ms -> S=L$strength, next=${nowUtc() + getNextReviewDelay(strength)}")
+        // 转换为秒，保留1位小数
+        val dwellTimeSeconds = String.format("%.1f", dwellTime / 1000.0)
+        
+        // 获取北京时间
+        val beijingTime = getBeijingTimeString()
+        
+        // 计算下次复习时间
+        val nextReviewTime = nowUtc() + getNextReviewDelay(strength)
+        val nextReviewBeijingTime = getBeijingTimeString(nextReviewTime)
+        
+        logLearning("${currentItem.text} | 停留时间: ${dwellTimeSeconds}秒 | 记忆强度: L$strength | 下次复习: $nextReviewBeijingTime")
     }
     
     private fun calculateMemoryStrength(dwellTimeMs: Long): Int {
@@ -184,4 +230,12 @@ class SimpleViewModel(private val repository: SimpleRepository) : ViewModel() {
     }
     
     private fun nowUtc(): Long = System.currentTimeMillis() + TimeZone.getDefault().rawOffset
+    
+    // 获取北京时间字符串
+    private fun getBeijingTimeString(timestamp: Long = nowUtc()): String {
+        val beijingTime = timestamp - TimeZone.getDefault().rawOffset + (8 * 60 * 60 * 1000L) // 北京时间UTC+8
+        val date = Date(beijingTime)
+        val formatter = SimpleDateFormat("yyyy年MM月dd日HH时mm分ss秒", Locale.CHINA)
+        return formatter.format(date)
+    }
 }
