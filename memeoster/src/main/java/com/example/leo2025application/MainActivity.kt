@@ -357,17 +357,24 @@ fun LogPanel(
     onToggleLogType: () -> Unit
 ) {
     val context = LocalContext.current
+    val scrollState = rememberScrollState()
     
+    // 自动滚动到底部
+    LaunchedEffect(systemLogs.size, learningLogs.size) {
+        scrollState.animateScrollTo(scrollState.maxValue)
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .verticalScroll(rememberScrollState())
-            .padding(8.dp)
     ) {
-        // 日志标题和按钮行
+        // 固定的标题和按钮行
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -375,7 +382,7 @@ fun LogPanel(
                 text = if (showSystemLogs) "系统日志" else "学习日志",
                 style = MaterialTheme.typography.titleMedium
             )
-            
+
             Row {
                 Button(
                     onClick = onToggleLogType,
@@ -383,7 +390,7 @@ fun LogPanel(
                 ) {
                     Text(if (showSystemLogs) "切换学习" else "切换系统", style = MaterialTheme.typography.bodySmall)
                 }
-                
+
                 Button(
                     onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -399,16 +406,30 @@ fun LogPanel(
             }
         }
         
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        // 显示当前选中的日志
-        val currentLogs = if (showSystemLogs) systemLogs else learningLogs
-        currentLogs.forEach { line ->
-    Text(
-                text = line,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(vertical = 2.dp)
-            )
+        // 可滚动的日志内容区域
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(scrollState)
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            val currentLogs = if (showSystemLogs) systemLogs else learningLogs
+            if (currentLogs.isEmpty()) {
+                Text(
+                    text = "暂无日志",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                currentLogs.forEach { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
+            }
         }
     }
 }

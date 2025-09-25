@@ -135,7 +135,7 @@ class ExcelImporter(private val context: Context) {
         try {
             Log.d("ExcelImporter", "开始批量添加，准备添加 ${items.size} 条")
             
-            repository.addBatch(items)
+            repository.addBatchWithSave(items)
             
             Log.d("ExcelImporter", "批量添加完成，共 ${items.size} 条")
         } catch (e: Exception) {

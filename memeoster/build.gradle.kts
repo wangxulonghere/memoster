@@ -57,6 +57,9 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     implementation("androidx.room:room-paging:2.6.1")
     
+    // Gson for JSON serialization
+    implementation("com.google.code.gson:gson:2.10.1")
+    
     // 暂时移除POI依赖，使用CSV导入
     // implementation("org.apache.poi:poi:5.2.3")
     // implementation("org.apache.poi:poi-ooxml:5.2.3")

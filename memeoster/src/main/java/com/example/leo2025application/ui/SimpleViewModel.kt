@@ -77,7 +77,7 @@ class SimpleViewModel(private val repository: SimpleRepository) : ViewModel() {
             log("Chinese: '$chineseTranslation'")
             log("Notes: '$notes'")
             
-            val new = repository.add(text, chineseTranslation, notes)
+            val new = repository.addWithSave(text, chineseTranslation, notes)
             log("添加新项目: ${new.text}")
             
             // 重新加载items
@@ -98,7 +98,7 @@ class SimpleViewModel(private val repository: SimpleRepository) : ViewModel() {
             log("=== SYSTEM: deleteCurrentItem() called ===")
             log("要删除的ID: $itemId")
             
-            val success = repository.deleteItemById(itemId)
+            val success = repository.deleteItemByIdWithSave(itemId)
             log("删除结果: $success")
             
             // 重新加载items
@@ -109,7 +109,7 @@ class SimpleViewModel(private val repository: SimpleRepository) : ViewModel() {
     fun clearAllItems() {
         viewModelScope.launch {
             log("=== SYSTEM: clearAllItems() called ===")
-            repository.clearAllItems()
+            repository.clearAllItemsWithSave()
             log("所有项目已清空")
             loadItems()
         }
