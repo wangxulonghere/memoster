@@ -1,5 +1,6 @@
 package com.example.leo2025application
 
+import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -10,7 +11,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-// import androidx.activity.enableEdgeToEdge // 降级版本中不可用
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -23,10 +23,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.leo2025application.ui.SimpleViewModel
+import com.example.leo2025application.ui.recommendation.RecommendationViewModel
 import com.example.leo2025application.ui.theme.Leo2025ApplicationTheme
 import com.example.leo2025application.data.SimpleRepository
 import com.example.leo2025application.data.ExcelImporter
 import com.example.leo2025application.data.StudyItem
+import com.example.leo2025application.data.models.StudyItem as NewStudyItem
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -37,7 +39,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // enableEdgeToEdge() // 降级版本中不可用
         
         repository = SimpleRepository(this)
         setContent {
@@ -56,14 +57,46 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 
-                StudyScreen(
-                    repository = repository,
-                    speak = { text ->
-                        if (ttsReady) {
-                            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance")
+                var useRecommendationAlgorithm by remember { mutableStateOf(false) }
+                
+                Column {
+                    // 模式切换按钮
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Button(
+                            onClick = { useRecommendationAlgorithm = !useRecommendationAlgorithm },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (useRecommendationAlgorithm) 
+                                    MaterialTheme.colorScheme.primary 
+                                else 
+                                    MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Text(if (useRecommendationAlgorithm) "推荐算法模式" else "简单模式")
                         }
                     }
-                )
+                    
+                    if (useRecommendationAlgorithm) {
+                        RecommendationStudyScreen(
+                            speak = { text ->
+                                if (ttsReady) {
+                                    tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance")
+                                }
+                            }
+                        )
+                    } else {
+                        StudyScreen(
+                            repository = repository,
+                            speak = { text ->
+                                if (ttsReady) {
+                                    tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance")
+                                }
+                            }
+                        )
+                    }
+                }
             }
         }
     }
@@ -103,7 +136,7 @@ fun StudyScreen(repository: SimpleRepository, speak: (String) -> Unit) {
             systemLogs = systemLogs,
             learningLogs = learningLogs,
             showSystemLogs = showSystemLogs,
-            onLogCopied = { /* 复制完成，不需要添加内容 */ },
+            onLogCopied = { },
             onToggleLogType = { showSystemLogs = !showSystemLogs }
         )
         
@@ -193,9 +226,9 @@ fun StudyScreen(repository: SimpleRepository, speak: (String) -> Unit) {
                     showDeleteDialog = true
                 }
             },
-                   onRight2 = {
-                       viewModel.logReviewStatus()
-                   }
+            onRight2 = {
+                viewModel.logReviewStatus()
+            }
         )
         
         // 添加项目对话框
@@ -347,6 +380,191 @@ fun StudyScreen(repository: SimpleRepository, speak: (String) -> Unit) {
 }
 
 @Composable
+fun RecommendationStudyScreen(speak: (String) -> Unit) {
+    val context = LocalContext.current
+    val viewModel: RecommendationViewModel = viewModel { RecommendationViewModel(context.applicationContext as Application) }
+    
+    // 状态管理
+    var showSystemLogs by remember { mutableStateOf(true) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showTranslation by remember { mutableStateOf(false) }
+    var newItemText by remember { mutableStateOf("") }
+    var newItemMeaning by remember { mutableStateOf("") }
+    
+    val currentItem by viewModel.currentItem.collectAsState()
+    val sessionStatus by viewModel.sessionStatus.collectAsState()
+    val queueProgress by viewModel.queueProgress.collectAsState()
+    val isSessionActive by viewModel.isSessionActive.collectAsState()
+    val isPaused by viewModel.isPaused.collectAsState()
+    val systemLogs by viewModel.systemLogs.collectAsState()
+    val learningLogs by viewModel.learningLogs.collectAsState()
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // 状态信息
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text(
+                    text = "推荐算法状态",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text("状态: $sessionStatus")
+                Text("进度: $queueProgress")
+                Text("会话: ${if (isSessionActive) "活跃" else "未开始"}")
+                Text("暂停: ${if (isPaused) "是" else "否"}")
+            }
+        }
+        
+        // 日志面板
+        LogPanel(
+            modifier = Modifier.fillMaxHeight(0.35f),
+            systemLogs = systemLogs,
+            learningLogs = learningLogs,
+            showSystemLogs = showSystemLogs,
+            onLogCopied = { },
+            onToggleLogType = { showSystemLogs = !showSystemLogs }
+        )
+        
+        // 学习内容
+        RecommendationStudyContent(
+            modifier = Modifier.weight(1f),
+            currentItem = currentItem,
+            onSpeak = { text ->
+                speak(text)
+                showTranslation = true
+            },
+            onSwipeNext = { 
+                showTranslation = false
+                viewModel.moveToNextItem()
+            },
+            showTranslation = showTranslation,
+            onToggleTranslation = { showTranslation = !showTranslation }
+        )
+        
+        // 学习控制按钮
+        Row(
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            if (!isSessionActive) {
+                Button(
+                    onClick = { viewModel.startStudySession() },
+                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                ) {
+                    Text("开始学习")
+                }
+            } else {
+                if (isPaused) {
+                    Button(
+                        onClick = { viewModel.resumeStudy() },
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                    ) {
+                        Text("继续")
+                    }
+                } else {
+                    Button(
+                        onClick = { viewModel.pauseStudy() },
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                    ) {
+                        Text("暂停")
+                    }
+                }
+                
+                Button(
+                    onClick = { viewModel.endStudySession() },
+                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                ) {
+                    Text("结束")
+                }
+            }
+        }
+        
+        // 手势提示
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text(
+                    text = "手势操作",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text("• 单击: 显示示意", style = MaterialTheme.typography.bodySmall)
+                Text("• 双击: 标记不熟", style = MaterialTheme.typography.bodySmall)
+                Text("• 滑动: 下一个", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        
+        // 底部导航
+        RecommendationBottomNavigation(
+            onAdd = { showAddDialog = true },
+            onLogQueue = { viewModel.logQueueContent() },
+            onLogDatabase = { viewModel.logDatabaseContent() }
+        )
+        
+        // 添加项目对话框
+        if (showAddDialog) {
+            AlertDialog(
+                onDismissRequest = { showAddDialog = false },
+                title = { Text("添加新内容") },
+                text = {
+                    Column {
+                        TextField(
+                            value = newItemText,
+                            onValueChange = { newItemText = it },
+                            label = { Text("英文内容") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextField(
+                            value = newItemMeaning,
+                            onValueChange = { newItemMeaning = it },
+                            label = { Text("中文含义") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (newItemText.isNotBlank()) {
+                                viewModel.addNewItem(newItemText, newItemMeaning)
+                                newItemText = ""
+                                newItemMeaning = ""
+                                showAddDialog = false
+                            }
+                        }
+                    ) {
+                        Text("添加")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAddDialog = false }) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
 fun LogPanel(
     modifier: Modifier = Modifier,
     systemLogs: List<String>,
@@ -436,7 +654,7 @@ fun LogPanel(
 @Composable
 fun StudyContent(
     modifier: Modifier = Modifier,
-    currentItem: com.example.leo2025application.data.StudyItem?,
+    currentItem: StudyItem?,
     onSpeak: (String) -> Unit,
     onSwipeNext: () -> Unit,
     onSwipePrev: () -> Unit,
@@ -486,7 +704,7 @@ fun StudyContent(
             contentAlignment = Alignment.Center
         ) {
             if (showTranslation && !currentItem?.notes.isNullOrBlank()) {
-                Text(
+    Text(
                     text = currentItem?.notes ?: "",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.tertiary
@@ -495,6 +713,86 @@ fun StudyContent(
         }
         
         Spacer(modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+fun RecommendationStudyContent(
+    modifier: Modifier = Modifier,
+    currentItem: NewStudyItem?,
+    onSpeak: (String) -> Unit,
+    onSwipeNext: () -> Unit,
+    showTranslation: Boolean,
+    onToggleTranslation: () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // 学习内容
+        Text(
+            text = currentItem?.word ?: "暂无内容",
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.padding(16.dp)
+        )
+        
+        // 中文含义区域
+        Box(
+            modifier = Modifier
+                .height(80.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (showTranslation && !currentItem?.meaning.isNullOrBlank()) {
+                Text(
+                    text = currentItem?.meaning ?: "",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+        }
+        
+        // 算法信息
+        currentItem?.let { item ->
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "算法信息",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text("虚拟复习次数: ${item.virtualReviewCount}")
+                    Text("实际复习次数: ${item.actualReviewCount}")
+                    Text("感受度: ${String.format("%.2f", item.sensitivity)}")
+                    Text("下次复习: ${item.getFormattedNextReviewTime()}")
+                }
+            }
+        }
+        
+        Spacer(modifier = Modifier.weight(1f))
+        
+        // 播放按钮
+        Button(
+            onClick = { 
+                currentItem?.word?.let { word -> 
+                    onSpeak(word)
+                    onToggleTranslation()
+                }
+            },
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Text("播放")
+        }
     }
 }
 
@@ -549,6 +847,45 @@ fun BottomNavigationBar(
             modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
         ) {
             Text("更多", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+fun RecommendationBottomNavigation(
+    modifier: Modifier = Modifier,
+    onAdd: () -> Unit,
+    onLogQueue: () -> Unit,
+    onLogDatabase: () -> Unit
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(80.dp)
+            .padding(4.dp)
+            .background(MaterialTheme.colorScheme.surface),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Button(
+            onClick = onLogQueue,
+            modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
+        ) {
+            Text("队列", style = MaterialTheme.typography.bodySmall)
+        }
+        
+        Button(
+            onClick = onAdd,
+            modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
+        ) {
+            Text("+", style = MaterialTheme.typography.bodySmall)
+        }
+        
+        Button(
+            onClick = onLogDatabase,
+            modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
+        ) {
+            Text("数据库", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
