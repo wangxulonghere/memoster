@@ -16,6 +16,9 @@ class QueueManager {
         private const val TAG = "QueueManager"
     }
     
+    // 项目从队列移除时的回调
+    var onItemRemovedFromQueue: ((StudyItem) -> Unit)? = null
+    
     private val nextReviewCalculator = NextReviewCalculator()
     
     /**
@@ -74,18 +77,22 @@ class QueueManager {
         // 更新数据管理器中的数据
         updateItem(updatedItem)
         
-        // 检查是否还在推荐队列中
-        if (updatedItem.nextReviewTime > System.currentTimeMillis()) {
-            // 下次复习时间还没到，从队列中移除
-            queue.removeItem(itemId)
-            Log.d(TAG, "项目已从队列移除: ID=$itemId, 下次复习时间=${updatedItem.getFormattedNextReviewTime()}")
-        } else {
-            // 重新排序队列
+        // 检查项目是否应该留在当前队列中
+        val now = System.currentTimeMillis()
+        if (updatedItem.nextReviewTime <= now) {
+            // 下次复习时间已到或已过，保留在队列中并重新排序
             queue.sortByReviewTime { id ->
                 val item = dataManager(id)
                 item?.nextReviewTime ?: Long.MAX_VALUE
             }
-            Log.d(TAG, "队列已重新排序: 项目ID=$itemId")
+            Log.d(TAG, "项目保留在队列中: ID=$itemId, 下次复习时间=${updatedItem.getFormattedNextReviewTime()}")
+        } else {
+            // 下次复习时间在未来，从当前队列中移除（定时器会在时间到时重新加入）
+            queue.removeItem(itemId)
+            Log.d(TAG, "项目已从队列移除，等待下次复习: ID=$itemId, 下次复习时间=${updatedItem.getFormattedNextReviewTime()}")
+            
+            // 通知需要为这个项目设置定时器
+            onItemRemovedFromQueue?.invoke(updatedItem)
         }
         
         return queue

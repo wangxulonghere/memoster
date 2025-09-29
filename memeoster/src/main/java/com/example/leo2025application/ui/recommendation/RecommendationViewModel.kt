@@ -13,6 +13,8 @@ import com.example.leo2025application.data.models.ReviewAction
 import com.example.leo2025application.data.repository.StudyDataManager
 import com.example.leo2025application.data.repository.BatchProcessor
 import com.example.leo2025application.data.repository.DataRecoveryManager
+import com.example.leo2025application.data.ExcelImporter
+import android.net.Uri
 import com.example.leo2025application.algorithm.queue.QueueManager
 import com.example.leo2025application.algorithm.queue.ReviewTimeChecker
 import com.example.leo2025application.business.session.StudySessionManager
@@ -125,16 +127,42 @@ class RecommendationViewModel(application: Application) : AndroidViewModel(appli
                     com.example.leo2025application.data.models.ReviewAction.SHOW_MEANING -> "点击显示示意(不太熟)"
                     com.example.leo2025application.data.models.ReviewAction.MARK_DIFFICULT -> "双击标记不熟(很难记)"
                 }
-                logLearning("学习完成: ${item.word} | 行为=$actionDesc | 停留时间=${record.getDwellTimeInSeconds()}秒")
-                logLearning("下次复习: ${updatedItem.getFormattedNextReviewTime()}")
+                
+                // 计算下次复习时间间隔
+                val nextReviewInterval = updatedItem.nextReviewTime - record.reviewTime
+                val formattedInterval = formatTimeInterval(nextReviewInterval)
+                
+                // 获取历史停留时间
+                val history = dataManager.getReviewHistory(item.id)
+                val recentDwellTimes = history.takeLast(5).map { it.dwellTime }
+                val dwellTimesStr = recentDwellTimes.joinToString(", ") { "${it}ms" }
+                
+                logLearning("学习完成: ${item.word} | 行为=$actionDesc | 本次停留=${record.dwellTime}ms")
+                logLearning("历史停留时间: [$dwellTimesStr]")
+                logLearning("算法参数: N=${String.format("%.1f", updatedItem.virtualReviewCount)}, n=${updatedItem.actualReviewCount}, S=${String.format("%.2f", updatedItem.sensitivity)}, t=${formattedInterval}")
+                
                 updateCurrentItem()
                 updateQueueProgress()
+                
+                // 不再自动输出队列内容，需要手动点击"队列"按钮
             }
             
             override fun onQueueEmpty() {
                 _currentItem.value = null
-                _sessionStatus.value = "推荐队列已空"
-                log("推荐队列已空，学习结束")
+                _sessionStatus.value = "等待下次复习时间"
+                logLearning("推荐队列已空，等待下次复习时间")
+                logLearning("暂无内容")
+            }
+            
+            override fun onQueueRefreshed(nextItem: StudyItem?) {
+                _currentItem.value = nextItem
+                _sessionStatus.value = "学习中"
+                log("队列已刷新，开始学习新内容: ${nextItem?.word ?: "无"}")
+            }
+            
+            override fun onItemAddedToQueue(item: StudyItem) {
+                val nextReviewTime = java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(item.nextReviewTime))
+                logLearning("项目加入队列: ${item.word} - ${item.meaning} (下次复习: $nextReviewTime)")
             }
             
             override fun onAccidentalOperation(dwellTime: Long, description: String) {
@@ -238,10 +266,34 @@ class RecommendationViewModel(application: Application) : AndroidViewModel(appli
     }
     
     /**
-     * 移动到下一个项目
+     * 移动到下一个项目 (通过滑动手势)
      */
     fun moveToNextItem() {
         viewModelScope.launch {
+            // 通过手势检测来触发学习完成和切换
+            sessionManager.onGestureDetected(
+                ReviewAction.SWIPE_NEXT,
+                "滑动切换下一个"
+            )
+            
+            val nextItem = sessionManager.moveToNextItem()
+            _currentItem.value = nextItem
+            updateQueueProgress()
+        }
+    }
+    
+    /**
+     * 点击显示含义并切换到下一个
+     */
+    fun onShowMeaningAndMoveNext() {
+        viewModelScope.launch {
+            // 先记录显示含义的学习行为
+            sessionManager.onGestureDetected(
+                ReviewAction.SHOW_MEANING,
+                "点击显示含义"
+            )
+            
+            // 然后移动到下一个项目
             val nextItem = sessionManager.moveToNextItem()
             _currentItem.value = nextItem
             updateQueueProgress()
@@ -270,6 +322,74 @@ class RecommendationViewModel(application: Application) : AndroidViewModel(appli
     }
     
     /**
+     * 删除当前学习内容
+     */
+    fun deleteCurrentItem(itemId: String) {
+        viewModelScope.launch {
+            try {
+                dataManager.removeStudyItem(itemId)
+                log("删除学习内容: ID=$itemId")
+                updateCurrentItem()
+            } catch (e: Exception) {
+                log("删除内容失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * 导入Excel文件
+     */
+    fun importFromExcel(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                log("开始导入Excel文件: $uri")
+                val importer = ExcelImporter(getApplication())
+                val items = importer.importFromExcel(uri)
+                
+                if (items.isNotEmpty()) {
+                    val importedItems = mutableListOf<StudyItem>()
+                    
+                    // 将导入的项目转换为新的StudyItem格式
+                    items.forEach { oldItem ->
+                        val newItem = StudyItem.create(
+                            word = oldItem.text,
+                            meaning = oldItem.chineseTranslation ?: ""
+                        )
+                        dataManager.addStudyItem(newItem)
+                        importedItems.add(newItem)
+                    }
+                    
+                    log("导入完成，共添加 ${items.size} 个学习内容")
+                    
+                    // 立即将新导入的项目加入当前队列
+                    if (_isSessionActive.value && sessionManager != null) {
+                        importedItems.forEach { item ->
+                            sessionManager.addNewItemToQueue(item)
+                            logLearning("新项目已加入队列: ${item.word} - ${item.meaning}")
+                        }
+                        
+                        // 如果当前没有学习内容，立即开始学习第一个新项目
+                        if (_currentItem.value == null && importedItems.isNotEmpty()) {
+                            val firstItem = importedItems.first()
+                            _currentItem.value = firstItem
+                            _sessionStatus.value = "学习中"
+                            logLearning("开始学习新导入的内容: ${firstItem.word}")
+                        }
+                        
+                        updateQueueProgress()
+                    } else {
+                        logLearning("导入成功，等待开始学习会话后会自动加入队列")
+                    }
+                } else {
+                    log("导入失败：没有解析到有效内容")
+                }
+            } catch (e: Exception) {
+                log("导入失败: ${e.message}")
+            }
+        }
+    }
+    
+    /**
      * 获取手势检测器
      */
     fun getGestureDetector(): android.view.GestureDetector {
@@ -277,27 +397,59 @@ class RecommendationViewModel(application: Application) : AndroidViewModel(appli
     }
     
     /**
-     * 打印队列内容
+     * 打印队列内容到学习日志
      */
     fun logQueueContent() {
-        val status = sessionManager.getSessionStatus()
-        log("=== 推荐队列内容 ===")
-        log("会话状态: ${status.isActive}")
-        log("当前项目: ${status.currentItem?.word}")
-        log("队列状态: ${status.queueStatus}")
+        viewModelScope.launch {
+            val queue = sessionManager.getRecommendationQueueInfo()
+            if (queue == null || queue.isEmpty()) {
+                logLearning("队列为空。")
+                return@launch
+            }
+            
+            logLearning("=== 推荐队列内容 ===")
+            
+            // 创建队列的快照，避免并发修改异常
+            val itemIdsSnapshot = queue.itemIds.toList() // 创建副本
+            val currentIndex = queue.currentIndex
+            
+            logLearning("队列进度: ${currentIndex + 1} / ${itemIdsSnapshot.size}")
+            
+            itemIdsSnapshot.forEachIndexed { index, itemId ->
+                val item = dataManager.getStudyItem(itemId)
+                val status = if (index == currentIndex) " (当前)" else ""
+                val nextReviewTime = item?.nextReviewTime?.let { 
+                    SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(it))
+                } ?: "未知"
+                logLearning("[$index]$status ${item?.word ?: "未知"} - ${item?.meaning ?: "无含义"} (下次: $nextReviewTime)")
+            }
+            logLearning("====================")
+        }
     }
     
     /**
-     * 打印数据库全部内容
+     * 打印数据库全部内容到学习日志
      */
     fun logDatabaseContent() {
-        val statistics = dataManager.getDataStatistics()
-        log("=== 数据库全部内容 ===")
-        log("总项目数: ${statistics.totalItems}")
-        log("到期项目数: ${statistics.dueItems}")
-        log("热缓存大小: ${statistics.hotCacheSize}")
-        log("历史缓存大小: ${statistics.historyCacheSize}")
-        log("内存使用: ${statistics.getFormattedMemoryUsage()}")
+        viewModelScope.launch {
+            val allItems = dataManager.getAllStudyItems()
+            if (allItems.isEmpty()) {
+                logLearning("数据库为空。")
+                return@launch
+            }
+            
+            logLearning("=== 数据库全部内容 ===")
+            logLearning("总项目数: ${allItems.size}")
+            
+            // 创建快照，避免并发修改异常
+            val itemsSnapshot = allItems.toList()
+            
+            itemsSnapshot.forEach { item ->
+                val nextReviewTime = SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(item.nextReviewTime))
+                logLearning("${item.word} - ${item.meaning} | N=${String.format("%.1f", item.virtualReviewCount)}, n=${item.actualReviewCount}, S=${String.format("%.2f", item.sensitivity)} | 下次: $nextReviewTime")
+            }
+            logLearning("====================")
+        }
     }
     
     /**
@@ -324,7 +476,7 @@ class RecommendationViewModel(application: Application) : AndroidViewModel(appli
     /**
      * 记录系统日志
      */
-    private fun log(message: String) {
+    fun log(message: String) {
         val timestamp = System.currentTimeMillis()
         val formattedMessage = "[${formatTime(timestamp)}] $message"
         _systemLogs.value = _systemLogs.value + formattedMessage
@@ -356,6 +508,19 @@ class RecommendationViewModel(application: Application) : AndroidViewModel(appli
         val date = Date(timestamp)
         val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         return formatter.format(date)
+    }
+    
+    /**
+     * 格式化时间间隔为天时分秒格式
+     */
+    private fun formatTimeInterval(intervalMs: Long): String {
+        val totalSeconds = intervalMs / 1000
+        val days = totalSeconds / (24 * 60 * 60)
+        val hours = (totalSeconds % (24 * 60 * 60)) / (60 * 60)
+        val minutes = (totalSeconds % (60 * 60)) / 60
+        val seconds = totalSeconds % 60
+        
+        return String.format("%d-%02d:%02d:%02d", days, hours, minutes, seconds)
     }
     
     /**

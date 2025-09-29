@@ -13,6 +13,11 @@ import com.example.leo2025application.algorithm.queue.ReviewTimeChecker
 import com.example.leo2025application.business.gesture.GestureCallback
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 /**
  * 学习会话管理器
@@ -39,7 +44,12 @@ class StudySessionManager(
     private var currentStudyStartTime = AtomicLong(0L)
     
     // 队列管理器
-    private val queueManager = QueueManager()
+    private val queueManager = QueueManager().apply {
+        // 设置项目从队列移除时的回调
+        onItemRemovedFromQueue = { item ->
+            scheduleReviewCheckForItem(item)
+        }
+    }
     
     // 复习时间检查器
     private val reviewTimeChecker = ReviewTimeChecker()
@@ -49,6 +59,12 @@ class StudySessionManager(
     
     // 会话回调
     private var sessionCallback: SessionCallback? = null
+    
+    // 下次复习检测定时器
+    private var nextReviewCheckJob: Job? = null
+    
+    // 最近的下次复习时间
+    private var nextReviewTime = AtomicLong(Long.MAX_VALUE)
     
     // 是否已注册生命周期回调
     private var lifecycleRegistered = false
@@ -175,9 +191,19 @@ class StudySessionManager(
         if (hasNext) {
             return startCurrentStudy()
         } else {
-            Log.i(TAG, "推荐队列已结束")
-            sessionCallback?.onQueueEmpty()
-            return null
+            // 检查队列是否真的为空（而不是只是到达了末尾）
+            if (queue.isEmpty()) {
+                Log.i(TAG, "推荐队列已空，开始检测下次复习时间")
+                // 检测最近的下次复习时间并设置定时器
+                scheduleNextReviewCheck()
+                sessionCallback?.onQueueEmpty()
+                return null
+            } else {
+                Log.i(TAG, "当前项目已到达末尾，但队列中还有其他项目，重新开始")
+                // 重新开始队列（回到第一个项目）
+                queue.currentIndex = 0
+                return startCurrentStudy()
+            }
         }
     }
     
@@ -186,6 +212,7 @@ class StudySessionManager(
      */
     fun pauseSession() {
         recommendationQueue?.pause()
+        nextReviewCheckJob?.cancel()
         Log.i(TAG, "学习会话已暂停")
         sessionCallback?.onSessionPaused()
     }
@@ -215,6 +242,23 @@ class StudySessionManager(
             startTime = session?.startTime,
             itemsStudied = session?.itemsStudied ?: 0
         )
+    }
+    
+    /**
+     * 获取推荐队列信息（用于日志显示）
+     */
+    fun getRecommendationQueueInfo(): com.example.leo2025application.data.models.RecommendationQueue? {
+        return recommendationQueue
+    }
+    
+    /**
+     * 将新项目立即加入当前队列
+     */
+    fun addNewItemToQueue(item: StudyItem) {
+        recommendationQueue?.let { queue ->
+            queue.addItem(item.id)
+            Log.i(TAG, "新项目已加入队列: ${item.word} (ID: ${item.id})")
+        }
     }
     
     /**
@@ -330,6 +374,105 @@ class StudySessionManager(
     override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) {}
     
     /**
+     * 为单个项目设置复习检测定时器
+     */
+    private fun scheduleReviewCheckForItem(item: StudyItem) {
+        val now = System.currentTimeMillis()
+        val delayMs = item.nextReviewTime - now
+        
+        if (delayMs <= 0) {
+            Log.d(TAG, "项目 ${item.word} 已到期，立即加入队列")
+            addItemToQueueIfDue(item)
+            return
+        }
+        
+        Log.i(TAG, "为项目 ${item.word} 设置定时器: ${delayMs}ms后 (${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(item.nextReviewTime))})")
+        
+        // 启动定时器
+        CoroutineScope(Dispatchers.IO).launch {
+            delay(delayMs)
+            
+            Log.i(TAG, "定时器触发：项目 ${item.word} 到期，加入队列")
+            addItemToQueueIfDue(item)
+        }
+    }
+    
+    /**
+     * 将到期项目加入队列
+     */
+    private fun addItemToQueueIfDue(item: StudyItem) {
+        val now = System.currentTimeMillis()
+        if (item.nextReviewTime <= now) {
+            recommendationQueue?.let { queue ->
+                if (!queue.itemIds.contains(item.id)) {
+                    queue.addItem(item.id)
+                    Log.i(TAG, "项目 ${item.word} 已加入队列")
+                    
+                    // 输出到学习日志
+                    sessionCallback?.onItemAddedToQueue(item)
+                    
+                    // 如果当前没有学习内容，立即开始学习
+                    if (currentItem == null) {
+                        val nextItem = startCurrentStudy()
+                        sessionCallback?.onQueueRefreshed(nextItem)
+                    }
+                } else {
+                    Log.d(TAG, "项目 ${item.word} 已在队列中，跳过添加")
+                }
+            }
+        } else {
+            Log.d(TAG, "项目 ${item.word} 还未到期，跳过加入队列")
+        }
+    }
+    
+    /**
+     * 调度下次复习检测
+     */
+    private fun scheduleNextReviewCheck() {
+        // 取消之前的定时器
+        nextReviewCheckJob?.cancel()
+        
+        // 查找最近的下次复习时间
+        val allItems = dataManager.getAllStudyItems()
+        val now = System.currentTimeMillis()
+        
+        val nearestReviewTime = allItems
+            .map { it.nextReviewTime }
+            .filter { it > now }
+            .minOrNull() ?: Long.MAX_VALUE
+        
+        if (nearestReviewTime == Long.MAX_VALUE) {
+            Log.i(TAG, "没有找到下次复习时间，所有内容都已学习完成")
+            return
+        }
+        
+        nextReviewTime.set(nearestReviewTime)
+        val delayMs = nearestReviewTime - now
+        
+        Log.i(TAG, "设置下次复习检测定时器: ${delayMs}ms后 (${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(nearestReviewTime))})")
+        
+        // 启动定时器
+        nextReviewCheckJob = CoroutineScope(Dispatchers.IO).launch {
+            delay(delayMs)
+            
+            Log.i(TAG, "定时器触发：检测到新内容到期")
+            
+            // 重新构建队列
+            val newQueue = queueManager.buildInitialQueue(allItems)
+            
+            if (!newQueue.isEmpty()) {
+                recommendationQueue = newQueue
+                val nextItem = startCurrentStudy()
+                sessionCallback?.onQueueRefreshed(nextItem)
+                Log.i(TAG, "队列已刷新，开始学习新内容")
+            } else {
+                Log.i(TAG, "定时器触发但队列仍为空，重新调度检测")
+                scheduleNextReviewCheck()
+            }
+        }
+    }
+    
+    /**
      * 清理资源
      */
     fun cleanup() {
@@ -408,5 +551,7 @@ interface SessionCallback {
     fun onStudyStarted(item: StudyItem)
     fun onStudyCompleted(item: StudyItem, record: ReviewRecord, updatedItem: StudyItem)
     fun onQueueEmpty()
+    fun onQueueRefreshed(nextItem: StudyItem?)
+    fun onItemAddedToQueue(item: StudyItem)
     fun onAccidentalOperation(dwellTime: Long, description: String)
 }

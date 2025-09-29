@@ -22,7 +22,7 @@ class ExcelImporter(private val context: Context) {
                 return@withContext emptyList()
             }
             
-            val reader = BufferedReader(InputStreamReader(inputStream, "GBK"))
+            val reader = BufferedReader(InputStreamReader(inputStream, "UTF-8"))
             val items = mutableListOf<StudyItem>()
             
             // 简单的CSV解析器

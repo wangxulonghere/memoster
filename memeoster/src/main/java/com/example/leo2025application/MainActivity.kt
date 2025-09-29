@@ -15,12 +15,19 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.leo2025application.ui.SimpleViewModel
 import com.example.leo2025application.ui.recommendation.RecommendationViewModel
@@ -57,46 +64,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 
-                var useRecommendationAlgorithm by remember { mutableStateOf(false) }
-                
-                Column {
-                    // 模式切换按钮
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(8.dp),
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Button(
-                            onClick = { useRecommendationAlgorithm = !useRecommendationAlgorithm },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (useRecommendationAlgorithm) 
-                                    MaterialTheme.colorScheme.primary 
-                                else 
-                                    MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        ) {
-                            Text(if (useRecommendationAlgorithm) "推荐算法模式" else "简单模式")
+                RecommendationStudyScreen(
+                    speak = { text ->
+                        if (ttsReady) {
+                            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance")
                         }
                     }
-                    
-                    if (useRecommendationAlgorithm) {
-                        RecommendationStudyScreen(
-                            speak = { text ->
-                                if (ttsReady) {
-                                    tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance")
-                                }
-                            }
-                        )
-                    } else {
-                        StudyScreen(
-                            repository = repository,
-                            speak = { text ->
-                                if (ttsReady) {
-                                    tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance")
-                                }
-                            }
-                        )
-                    }
-                }
+                )
             }
         }
     }
@@ -335,7 +309,7 @@ fun StudyScreen(repository: SimpleRepository, speak: (String) -> Unit) {
                         onClick = {
                             android.util.Log.d("MainActivity", "用户点击了选择文件按钮")
                             android.util.Log.d("MainActivity", "准备启动文件选择器")
-                            filePickerLauncher.launch(arrayOf("*/*"))
+                            filePickerLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "application/csv", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "*/*"))
                             android.util.Log.d("MainActivity", "文件选择器已启动")
                         }
                     ) {
@@ -392,130 +366,119 @@ fun RecommendationStudyScreen(speak: (String) -> Unit) {
     var newItemMeaning by remember { mutableStateOf("") }
     
     val currentItem by viewModel.currentItem.collectAsState()
-    val sessionStatus by viewModel.sessionStatus.collectAsState()
-    val queueProgress by viewModel.queueProgress.collectAsState()
-    val isSessionActive by viewModel.isSessionActive.collectAsState()
     val isPaused by viewModel.isPaused.collectAsState()
     val systemLogs by viewModel.systemLogs.collectAsState()
     val learningLogs by viewModel.learningLogs.collectAsState()
+    
+    // 监听当前项目变化，自动隐藏翻译
+    LaunchedEffect(currentItem) {
+        showTranslation = false
+    }
+    
+    // 文件选择器
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.importFromExcel(it) }
+    }
+    
+    // 自动开始学习会话
+    LaunchedEffect(Unit) {
+        viewModel.startStudySession()
+    }
     
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        // 状态信息
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Text(
-                    text = "推荐算法状态",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text("状态: $sessionStatus")
-                Text("进度: $queueProgress")
-                Text("会话: ${if (isSessionActive) "活跃" else "未开始"}")
-                Text("暂停: ${if (isPaused) "是" else "否"}")
-            }
-        }
-        
         // 日志面板
         LogPanel(
-            modifier = Modifier.fillMaxHeight(0.35f),
+            modifier = Modifier.fillMaxHeight(0.4f),
             systemLogs = systemLogs,
             learningLogs = learningLogs,
             showSystemLogs = showSystemLogs,
             onLogCopied = { },
-            onToggleLogType = { showSystemLogs = !showSystemLogs }
+            onToggleLogType = { showSystemLogs = !showSystemLogs },
+            onLogQueue = { viewModel.logQueueContent() },
+            onLogDatabase = { viewModel.logDatabaseContent() }
         )
         
-        // 学习内容
-        RecommendationStudyContent(
-            modifier = Modifier.weight(1f),
-            currentItem = currentItem,
-            onSpeak = { text ->
-                speak(text)
-                showTranslation = true
-            },
-            onSwipeNext = { 
-                showTranslation = false
-                viewModel.moveToNextItem()
-            },
-            showTranslation = showTranslation,
-            onToggleTranslation = { showTranslation = !showTranslation }
-        )
-        
-        // 学习控制按钮
-        Row(
-            horizontalArrangement = Arrangement.SpaceEvenly,
+        // 学习内容区域 - 添加手势检测
+        Box(
             modifier = Modifier
+                .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .pointerInput(Unit) {
+                    var totalDrag = Offset.Zero
+                    
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            totalDrag = Offset.Zero
+                            viewModel.log("开始滑动: $offset")
+                        },
+                                onDragEnd = {
+                                    viewModel.log("滑动结束，总距离: $totalDrag")
+                                    
+                                    // 在滑动结束时检测总距离
+                                    if (totalDrag.x > 100 || totalDrag.y < -100) {
+                                        viewModel.log("检测到滑动切换手势: 总距离=$totalDrag")
+                                        // 根据是否显示翻译判断用户行为
+                                        if (showTranslation) {
+                                            viewModel.onShowMeaningAndMoveNext()
+                                        } else {
+                                            viewModel.moveToNextItem()
+                                        }
+                                    }
+                                },
+                        onDrag = { change, dragAmount ->
+                            totalDrag += dragAmount
+                        }
+                    )
+                }
+                .clickable { 
+                    // 点击显示含义
+                    showTranslation = true
+                    currentItem?.word?.let { word ->
+                        speak(word)
+                    }
+                }
         ) {
-            if (!isSessionActive) {
-                Button(
-                    onClick = { viewModel.startStudySession() },
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
-                ) {
-                    Text("开始学习")
-                }
-            } else {
-                if (isPaused) {
-                    Button(
-                        onClick = { viewModel.resumeStudy() },
-                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
-                    ) {
-                        Text("继续")
-                    }
-                } else {
-                    Button(
-                        onClick = { viewModel.pauseStudy() },
-                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
-                    ) {
-                        Text("暂停")
-                    }
-                }
-                
-                Button(
-                    onClick = { viewModel.endStudySession() },
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
-                ) {
-                    Text("结束")
-                }
-            }
-        }
-        
-        // 手势提示
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            RecommendationStudyContent(
+                modifier = Modifier.fillMaxSize(),
+                currentItem = currentItem,
+                onSpeak = { text ->
+                    speak(text)
+                    showTranslation = true
+                },
+                onSwipeNext = { 
+                    showTranslation = false
+                    viewModel.moveToNextItem()
+                },
+                showTranslation = showTranslation,
+                onToggleTranslation = { showTranslation = !showTranslation }
             )
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Text(
-                    text = "手势操作",
-                    style = MaterialTheme.typography.titleSmall
-                )
-                Text("• 单击: 显示示意", style = MaterialTheme.typography.bodySmall)
-                Text("• 双击: 标记不熟", style = MaterialTheme.typography.bodySmall)
-                Text("• 滑动: 下一个", style = MaterialTheme.typography.bodySmall)
-            }
         }
         
         // 底部导航
         RecommendationBottomNavigation(
+            onPause = { 
+                if (isPaused) {
+                    viewModel.resumeStudy()
+                } else {
+                    viewModel.pauseStudy()
+                }
+            },
+            onImport = { 
+                filePickerLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "application/csv", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "*/*"))
+            },
             onAdd = { showAddDialog = true },
-            onLogQueue = { viewModel.logQueueContent() },
-            onLogDatabase = { viewModel.logDatabaseContent() }
+            onDelete = { 
+                currentItem?.let { item ->
+                    viewModel.deleteCurrentItem(item.id)
+                }
+            },
+            onMore = { /* 保留功能 */ }
         )
         
         // 添加项目对话框
@@ -571,7 +534,9 @@ fun LogPanel(
     learningLogs: List<String>,
     showSystemLogs: Boolean,
     onLogCopied: () -> Unit,
-    onToggleLogType: () -> Unit
+    onToggleLogType: () -> Unit,
+    onLogQueue: () -> Unit = {},
+    onLogDatabase: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
@@ -600,12 +565,19 @@ fun LogPanel(
                 style = MaterialTheme.typography.titleMedium
             )
 
-            Row {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 Button(
                     onClick = onToggleLogType,
-                    modifier = Modifier.padding(horizontal = 4.dp)
+                    modifier = Modifier
+                        .width(80.dp)
+                        .height(36.dp)
                 ) {
-                    Text(if (showSystemLogs) "切换学习" else "切换系统", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (showSystemLogs) "切换学习" else "切换系统", 
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
 
                 Button(
@@ -616,9 +588,29 @@ fun LogPanel(
                         clipboard.setPrimaryClip(ClipData.newPlainText("日志", logText))
                         onLogCopied()
                     },
-                    modifier = Modifier.padding(horizontal = 4.dp)
+                    modifier = Modifier
+                        .width(80.dp)
+                        .height(36.dp)
                 ) {
                     Text("复制当前", style = MaterialTheme.typography.bodySmall)
+                }
+
+                Button(
+                    onClick = onLogQueue,
+                    modifier = Modifier
+                        .width(80.dp)
+                        .height(36.dp)
+                ) {
+                    Text("队列", style = MaterialTheme.typography.bodySmall)
+                }
+
+                Button(
+                    onClick = onLogDatabase,
+                    modifier = Modifier
+                        .width(80.dp)
+                        .height(36.dp)
+                ) {
+                    Text("数据库", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -727,72 +719,37 @@ fun RecommendationStudyContent(
 ) {
     Column(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(16.dp),
+            .fillMaxSize()
+            .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // 学习内容
+        // 学习内容 - 更大的字体
         Text(
             text = currentItem?.word ?: "暂无内容",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(16.dp)
+            style = MaterialTheme.typography.headlineLarge,
+            modifier = Modifier.padding(32.dp)
         )
         
-        // 中文含义区域
+        // 中文含义区域 - 更大的空间
         Box(
             modifier = Modifier
-                .height(80.dp)
+                .height(120.dp)
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 32.dp, vertical = 16.dp),
             contentAlignment = Alignment.Center
         ) {
             if (showTranslation && !currentItem?.meaning.isNullOrBlank()) {
                 Text(
                     text = currentItem?.meaning ?: "",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.secondary
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    textAlign = TextAlign.Center
                 )
-            }
-        }
-        
-        // 算法信息
-        currentItem?.let { item ->
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(8.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = "算法信息",
-                        style = MaterialTheme.typography.titleSmall
-                    )
-                    Text("虚拟复习次数: ${item.virtualReviewCount}")
-                    Text("实际复习次数: ${item.actualReviewCount}")
-                    Text("感受度: ${String.format("%.2f", item.sensitivity)}")
-                    Text("下次复习: ${item.getFormattedNextReviewTime()}")
-                }
             }
         }
         
         Spacer(modifier = Modifier.weight(1f))
-        
-        // 播放按钮
-        Button(
-            onClick = { 
-                currentItem?.word?.let { word -> 
-                    onSpeak(word)
-                    onToggleTranslation()
-                }
-            },
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text("播放")
-        }
     }
 }
 
@@ -854,9 +811,11 @@ fun BottomNavigationBar(
 @Composable
 fun RecommendationBottomNavigation(
     modifier: Modifier = Modifier,
+    onPause: () -> Unit,
+    onImport: () -> Unit = {},
     onAdd: () -> Unit,
-    onLogQueue: () -> Unit,
-    onLogDatabase: () -> Unit
+    onDelete: () -> Unit,
+    onMore: () -> Unit
 ) {
     Row(
         modifier = modifier
@@ -867,13 +826,23 @@ fun RecommendationBottomNavigation(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // 1号：暂停
         Button(
-            onClick = onLogQueue,
+            onClick = onPause,
             modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
         ) {
-            Text("队列", style = MaterialTheme.typography.bodySmall)
+            Text("暂停", style = MaterialTheme.typography.bodySmall)
         }
         
+        // 2号：导入
+        Button(
+            onClick = onImport,
+            modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
+        ) {
+            Text("导入", style = MaterialTheme.typography.bodySmall)
+        }
+        
+        // 3号：添加
         Button(
             onClick = onAdd,
             modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
@@ -881,11 +850,20 @@ fun RecommendationBottomNavigation(
             Text("+", style = MaterialTheme.typography.bodySmall)
         }
         
+        // 4号：删除
         Button(
-            onClick = onLogDatabase,
+            onClick = onDelete,
             modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
         ) {
-            Text("数据库", style = MaterialTheme.typography.bodySmall)
+            Text("删除", style = MaterialTheme.typography.bodySmall)
+        }
+        
+        // 5号：更多
+        Button(
+            onClick = onMore,
+            modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
+        ) {
+            Text("更多", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
