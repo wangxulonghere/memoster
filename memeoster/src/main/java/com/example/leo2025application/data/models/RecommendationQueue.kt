@@ -88,8 +88,13 @@ data class RecommendationQueue(
      */
     fun addItem(itemId: String) {
         if (!itemIds.contains(itemId)) {
-            itemIds.add(itemId)
-            Log.d(TAG, "添加新项目到队列: ID=$itemId, 新队列大小=${itemIds.size}")
+            // 栈行为：新项目插入到队列前面（索引0位置）
+            itemIds.add(0, itemId)
+            // 如果当前索引不为0，需要调整当前索引
+            if (currentIndex >= 0) {
+                currentIndex += 1
+            }
+            Log.d(TAG, "添加新项目到队列顶部: ID=$itemId, 新队列大小=${itemIds.size}, 当前索引=${currentIndex}")
         } else {
             Log.d(TAG, "项目已在队列中: ID=$itemId")
         }

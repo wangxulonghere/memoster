@@ -185,6 +185,17 @@ class StudySessionManager(
         // 结束当前学习
         endCurrentStudy()
         
+        // 检查是否有新项目加入队列顶部（栈行为：新项目在索引0）
+        if (queue.itemIds.isNotEmpty()) {
+            val topItem = dataManager.getStudyItem(queue.itemIds[0])
+            if (topItem != null && topItem.nextReviewTime <= System.currentTimeMillis()) {
+                // 有新项目在队列顶部，优先学习
+                Log.i(TAG, "检测到队列顶部有新项目，优先学习: ${topItem.word}")
+                queue.currentIndex = 0
+                return startCurrentStudy()
+            }
+        }
+        
         // 移动到下一个项目
         val hasNext = queueManager.moveToNextItem(queue)
         
@@ -415,6 +426,9 @@ class StudySessionManager(
                     if (currentItem == null) {
                         val nextItem = startCurrentStudy()
                         sessionCallback?.onQueueRefreshed(nextItem)
+                    } else {
+                        // 如果当前有学习内容，设置标志表示有新项目加入，下次切换时会优先学习
+                        Log.i(TAG, "新项目已加入队列，下次切换时会优先学习: ${item.word}")
                     }
                 } else {
                     Log.d(TAG, "项目 ${item.word} 已在队列中，跳过添加")

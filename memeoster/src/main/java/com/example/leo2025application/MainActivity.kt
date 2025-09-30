@@ -566,12 +566,13 @@ fun LogPanel(
             )
 
             Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Button(
                     onClick = onToggleLogType,
                     modifier = Modifier
-                        .width(80.dp)
+                        .weight(1f)
                         .height(36.dp)
                 ) {
                     Text(
@@ -589,7 +590,7 @@ fun LogPanel(
                         onLogCopied()
                     },
                     modifier = Modifier
-                        .width(80.dp)
+                        .weight(1f)
                         .height(36.dp)
                 ) {
                     Text("复制当前", style = MaterialTheme.typography.bodySmall)
@@ -598,7 +599,7 @@ fun LogPanel(
                 Button(
                     onClick = onLogQueue,
                     modifier = Modifier
-                        .width(80.dp)
+                        .weight(1f)
                         .height(36.dp)
                 ) {
                     Text("队列", style = MaterialTheme.typography.bodySmall)
@@ -607,7 +608,7 @@ fun LogPanel(
                 Button(
                     onClick = onLogDatabase,
                     modifier = Modifier
-                        .width(80.dp)
+                        .weight(1f)
                         .height(36.dp)
                 ) {
                     Text("数据库", style = MaterialTheme.typography.bodySmall)
